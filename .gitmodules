@@ -1,0 +1,3 @@
+[submodule "lidl-gateway-freedom"]
+	path = lidl-gateway-freedom
+	url = https://github.com/banksy-git/lidl-gateway-freedom

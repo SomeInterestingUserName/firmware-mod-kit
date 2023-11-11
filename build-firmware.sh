@@ -98,7 +98,7 @@ case $FS_TYPE in
 			HR_BLOCKSIZE="$(($FS_BLOCKSIZE/1024))"
 			echo "Squashfs block size is $HR_BLOCKSIZE Kb"
 		fi
-
+		echo "Using $SUDO $MKFS \"$ROOTFS\" \"$FSOUT\" $ENDIANESS $BS $COMP $MKFS_ARGS"
 		$SUDO $MKFS "$ROOTFS" "$FSOUT" $ENDIANESS $BS $COMP $MKFS_ARGS
 		;;
 	"cramfs")
@@ -133,14 +133,25 @@ if [ ! -e $FSOUT ]; then
 	echo "Failed to create new file system! Quitting..."
 	exit 1
 fi
+# Append two-byte checksum to the end of the file
+$SUDO python3 ./lidl-gateway-freedom/scripts/rootfs_tool.py build $FSOUT "$FSOUT.temp"
 
+# Verify the operation we just did
+$SUDO python3 ./lidl-gateway-freedom/scripts/rootfs_tool.py check "$FSOUT.temp"
+
+if [ $? -ne 0 ]; then
+	echo "RTL Checksum Failed! Quitting..."
+	exit 1
+fi
+$SUDO cp "$FSOUT.temp" $FSOUT
 # Append the new file system to the first part of the original firmware file
 cp $HEADER_IMAGE $FWOUT
 $SUDO cat $FSOUT >> $FWOUT
 
 # Calculate and create any filler bytes required between the end of the file system and the footer / EOF.
 CUR_SIZE=$(ls -l $FWOUT | awk '{print $5}')
-((FILLER_SIZE=$FW_SIZE-$CUR_SIZE-$FOOTER_SIZE))
+# Took footer out of size computation since the RTL firmware footer is the two-byte checksum, which we already appended to the main squashfs. The footer file in fmk will be outdated anyway because the checksum has changed, so it is simply ignored.
+((FILLER_SIZE=$FW_SIZE-$CUR_SIZE))
 
 if [ "$FILLER_SIZE" -lt 0 ]; then
 	echo "ERROR: New firmware image will be larger than original image!"
@@ -149,7 +160,7 @@ if [ "$FILLER_SIZE" -lt 0 ]; then
 	echo "       REFUSING to create new firmware image."
 	echo ""
 	echo "       Original file size: $FW_SIZE"
-	echo "       Current file size:  $CUR_SIZE (plus footer of $FOOTER_SIZE bytes)"
+	echo "       Current file size:  $CUR_SIZE"
 	echo ""
 	echo "       Quitting..."
 #	rm -f "$FWOUT" "$FSOUT"
@@ -163,11 +174,7 @@ else
 	fi	
 fi
 
-# Append the footer to the new firmware image, if there is any footer
-if [ "$FOOTER_SIZE" -gt "0" ]; then
-	echo "Appending ${FOOTER_SIZE} byte footer at offset ${FOOTER_OFFSET}"
-	cat $FOOTER_IMAGE >> "$FWOUT"
-fi
+# RTL firmware footer is a two-byte checksum of the original image, so we just ignore it as rootfs_tool.py already computes a new checksum and appends it as a "footer".
 
 CHECKSUM_ERROR=0
 
@@ -228,4 +235,7 @@ if [ -e "$FSOUT" ]; then
 	rm -f "$FSOUT"
 fi
 
+if [ -e "$FSOUT.temp" ]; then
+	rm -f "$FSOUT.temp"
+fi
 printf "\nNew firmware image has been saved to: $FWOUT\n"
